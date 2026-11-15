@@ -201,7 +201,7 @@ public final class ClickGui extends Screen {
 
     private static Column columnFor(Module module) {
         return switch (module.id()) {
-            case "mace_swap", "mace_helper", "hitboxes", "target_esp" -> Column.COMBAT;
+            case "aura", "mace_swap", "mace_helper", "hitboxes", "target_esp" -> Column.COMBAT;
             case "trail", "elytra_swap", "quick_rocket", "jump_circles", "jump_particles", "landing_particles", "particle_trails",
                     "steady_view" -> Column.MOVEMENT;
             case "skin", "nametags", "viewmodel", "swing_animations", "shader_hand", "chinahat", "click_pearl", "held_durability" -> Column.PLAYER;
@@ -212,8 +212,8 @@ public final class ClickGui extends Screen {
 
     private ModuleSettings settingsFor(Module module) {
         return switch (module) {
+            case Aura aura -> aura.settings(this);
             case BlockOverlay overlay -> overlay.settings(this);
-            case ShaderSky sky -> sky.settings(this);
             case ShaderHand hand -> hand.settings(this);
             case Skin skin -> skin.settings(this);
             case ElytraSwap elytra -> elytra.settings(this);

@@ -7,6 +7,8 @@ import net.minecraft.core.particles.ParticleTypes;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import com.orbitdlc.client.discord.DiscordRPC;
+import com.orbitdlc.client.util.RotationManager;
+
 
 public final class OrbitDLCClient implements ClientModInitializer {
     private final ModuleManager modules = new ModuleManager();
@@ -95,6 +97,11 @@ public final class OrbitDLCClient implements ClientModInitializer {
         );
         particleModules.forEach(modules::register);
         ClientTickEvents.END_CLIENT_TICK.register(client -> particleModules.forEach(module -> module.tick(client)));
+        modules.register(Aura.INSTANCE);
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            RotationManager.get().tick();
+            Aura.INSTANCE.tick(client);
+        });
 
     }
 }

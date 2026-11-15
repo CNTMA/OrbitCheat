@@ -99,7 +99,6 @@ public final class Aura extends Module {
     private void performAttack(Minecraft mc) {
         var p = mc.player;
         if (p == null || target == null || mc.gameMode == null) return;
-        if (!AuraUtil.aimsAt(p.getYRot(), p.getXRot(), attackRange, target, !noWallCheck)) return;
 
         if (shieldBreak && target.isBlocking()) {
             if (p.getMainHandItem().is(ItemTags.AXES)) {
@@ -113,6 +112,9 @@ public final class Aura extends Module {
         }
 
         if (canAttackNow(mc)) {
+            if (onlyCrit && p.isSprinting()) {
+                p.setSprinting(false);
+            }
             ticks[3] = 0f;
             mc.gameMode.attack(p, target);
             hitAge = 0;
@@ -133,17 +135,33 @@ public final class Aura extends Module {
         if (noContainerOpen && mc.gui.screen() != null
                 && !(mc.gui.screen() instanceof ClickGui)
                 && !(mc.gui.screen() instanceof ModuleSettings)) return false;
-        if (!AuraUtil.withinReach(target, attackRange)) return false;
+        // Дистанция: attackRange + половина extraRange (запас на движущуюся цель)
+        // Полная дистанция (attackRange + extraRange) — бьём на самом пределе
+        double reach = attackRange + extraRange;
+        if (!AuraUtil.withinReach(target, reach)) return false;
+
+        // Спринт-сброс делаем ДО проверки кулдауна
+        if (onlyCrit && p.isSprinting()) {
+            p.setSprinting(false);
+        }
 
         if (p.fallDistance > 1.5f) {
-            if (p.getCooldowns().isOnCooldown(p.getMainHandItem()) || hitAge <= 3) return false;
-        } else if (p.getAttackStrengthScale(0.5f) < 0.9f || hitAge < 5) {
+            if (p.getCooldowns().isOnCooldown(p.getMainHandItem()) || hitAge <= 0) return false;
+        } else if (p.getAttackStrengthScale(0.5f) < 0.8f || hitAge < 1) {
             return false;
         }
 
-        return AuraUtil.isFalling()
+        // Крит-логика
+        boolean critReady = p.fallDistance > 0.0f && !p.onGround() && !p.isInWater()
+                && !p.onClimbable() && p.getVehicle() == null
+                && !p.hasEffect(net.minecraft.world.effect.MobEffects.BLINDNESS)
+                && !p.isSprinting();
+        boolean canHit = critReady
                 || (adaptiveHit && p.onGround() && !mc.options.keyJump.isDown())
                 || !AuraUtil.notInLiquid();
+        // onlyCrit: если true и крит невозможен — не бьём (кроме случая, когда цель может убежать)
+        //if (onlyCrit && !critReady && target.getHealth() > 6.0f) return false;
+        return canHit;
     }
 
     private void updateRotation(Minecraft mc) {
@@ -152,7 +170,13 @@ public final class Aura extends Module {
         Vec3 eye = p.getEyePosition();
 
         // Предсказываем позицию цели на 1.5 тика вперёд (учитываем прыжок)
-        Vec3 targetPos = target.position().add(target.getDeltaMovement().scale(1.5));
+        // Предсказание на 2 тика с учётом гравитации (для прыгающих/падающих)
+        var vel = target.getDeltaMovement();
+        double predictedY = vel.y - 0.08; // базовая гравитация игрока
+        if (!target.onGround()) {
+            vel = new Vec3(vel.x, predictedY * 0.98, vel.z);
+        }
+        Vec3 targetPos = target.position().add(vel.scale(1.0));
         Vec3 aimCenter = new Vec3(
                 targetPos.x,
                 targetPos.y + target.getBbHeight() * 0.5,

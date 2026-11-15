@@ -48,8 +48,10 @@ public final class RotationManager {
         float pitchDelta = target.pitch() - p.getXRot();
         float total = Math.abs(yawDelta) + Math.abs(pitchDelta);
         if (total < 0.5f) return;
-        float yawStep = Math.abs(yawDelta / total) * speed;
-        float pitchStep = Math.abs(pitchDelta / total) * speed;
+        // Ускоряем поворот на 20% (приоритет — удар, а не плавность)
+        float boosted = speed * 1.2f;
+        float yawStep = Math.abs(yawDelta / total) * boosted;
+        float pitchStep = Math.abs(pitchDelta / total) * boosted;
         float newYaw = p.getYRot() + Mth.clamp(yawDelta, -yawStep, yawStep);
         float newPitch = p.getXRot() + Mth.clamp(pitchDelta, -pitchStep, pitchStep);
         newYaw = patchGCD(p.getYRot(), newYaw);

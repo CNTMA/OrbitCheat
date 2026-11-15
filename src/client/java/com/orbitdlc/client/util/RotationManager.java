@@ -24,6 +24,7 @@ public final class RotationManager {
         this.priority = priority;
         this.state = State.AIM;
         this.aimTicks = 0;
+        apply(target, aimSpeed); // <--- ДОБАВИТЬ ЭТО
     }
 
     public void tick() {

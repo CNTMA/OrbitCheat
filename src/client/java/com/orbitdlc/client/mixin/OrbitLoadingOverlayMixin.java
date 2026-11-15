@@ -19,7 +19,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(LoadingOverlay.class)
 abstract class OrbitLoadingOverlayMixin {
-    @Unique private static final Identifier orbitdlc$icon = OrbitDLC.id("black_hole.png");
+    @Unique private static final Identifier orbitdlc$icon = OrbitDLC.id("icon.png");
     @Shadow @Final private net.minecraft.client.Minecraft minecraft;
     @Shadow @Final private ReloadInstance reload;
     @Shadow private float currentProgress;

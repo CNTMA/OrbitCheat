@@ -197,7 +197,7 @@ public final class GuiHud extends Module {
                 var bar = HudDrag.position(HudDrag.Widget.STATUS, graphics, 8, 8, barWidth, 19);
                 panel(graphics, bar.x(), bar.y(), barWidth, 19);
                 graphics.enableScissor(bar.x(), bar.y(), bar.x() + barWidth - 4, bar.y() + 19);
-                graphics.blit(OrbitDLC.id("black_hole.png"), bar.x() + 4, bar.y() + 2, bar.x() + 19, bar.y() + 17, 0f, 1f, 0f, 1f);
+                graphics.blit(OrbitDLC.id("icon.png"), bar.x() + 4, bar.y() + 2, bar.x() + 19, bar.y() + 17, 0f, 1f, 0f, 1f);
                 int x = bar.x() + 20;
                 for (String field : fields) {
                     draw(graphics, client, field, x, bar.y() + 5, TEXT);

@@ -86,7 +86,7 @@ public final class MainMenu extends Screen {
 
     private void renderPanel(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float delta) {
         graphics.pose().pushMatrix();
-        graphics.blit(OrbitDLC.id("black_hole.png"), left, top - 50, left + 47, top - 3, 0f, 1f, 0f, 1f);
+        graphics.blit(OrbitDLC.id("icon.png"), left, top - 50, left + 47, top - 3, 0f, 1f, 0f, 1f);
         graphics.pose().translate(left, top);
         graphics.pose().scale(1.8f);
         graphics.text(font, Component.literal("Welcome to OrbitDLC").setStyle(OrbitButton.HEADING), 0, 0, 0xFFF9FAFF, false);

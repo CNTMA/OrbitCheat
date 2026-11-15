@@ -6,7 +6,7 @@
 	"description": "OrbitDLC client mod.",
 	"authors": ["Biwer!", "Astrrrax!"],
 	"license": "CC0-1.0",
-	"icon": "assets/orbitdlc/black_hole.png",
+	"icon": "assets/orbitdlc/icon.png",
 	"environment": "*",
 	"entrypoints": {
 		"main": [
@@ -26,7 +26,7 @@
 	],
 	"depends": {
 		"fabricloader": ">=0.19.5",
-		"minecraft": "~26.3",
+		"minecraft": " 26.3",
 		"java": ">=25",
 		"fabric-api": "*"
 	}

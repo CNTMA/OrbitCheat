@@ -137,7 +137,7 @@ public final class Aura extends Module {
 
         if (p.fallDistance > 1.5f) {
             if (p.getCooldowns().isOnCooldown(p.getMainHandItem()) || hitAge <= 3) return false;
-        } else if (p.getAttackStrengthScale(0.5f) < 0.9f || hitAge < 10) {
+        } else if (p.getAttackStrengthScale(0.5f) < 0.9f || hitAge < 5) {
             return false;
         }
 
@@ -150,15 +150,19 @@ public final class Aura extends Module {
         var p = mc.player;
         if (p == null || target == null) return;
         Vec3 eye = p.getEyePosition();
-        Vec3 offset = AuraUtil.getAimPoint(eye, target, attackRange, !noWallCheck);
-        float targetYaw, targetPitch;
-        if (offset.lengthSqr() < 1e-6) {
-            targetYaw = p.getYRot();
-            targetPitch = p.getXRot();
-        } else {
-            targetYaw = (float) Mth.wrapDegrees(Math.toDegrees(Math.atan2(offset.z, offset.x)) - 90.0);
-            targetPitch = (float) -Math.toDegrees(Math.atan2(offset.y, Math.hypot(offset.x, offset.z)));
-        }
+
+        // Предсказываем позицию цели на 1.5 тика вперёд (учитываем прыжок)
+        Vec3 targetPos = target.position().add(target.getDeltaMovement().scale(1.5));
+        Vec3 aimCenter = new Vec3(
+                targetPos.x,
+                targetPos.y + target.getBbHeight() * 0.5,
+                targetPos.z
+        );
+
+        Vec3 offset = aimCenter.subtract(eye);
+
+        float targetYaw = (float) Mth.wrapDegrees(Math.toDegrees(Math.atan2(offset.z, offset.x)) - 90.0);
+        float targetPitch = (float) -Math.toDegrees(Math.atan2(offset.y, Math.hypot(offset.x, offset.z)));
 
         switch (aimMode) {
             case "FanTime", "FanTimeFOV" -> rotateFanTime(mc, targetYaw, targetPitch);
@@ -178,31 +182,32 @@ public final class Aura extends Module {
         float sw = (float) (Math.sin(t * 0.4) * 0.12 + Math.sin(t * 0.95 + 1.4) * 0.08);
         float sh = (float) (Math.cos(t * 0.5 + 0.7) * 0.10);
 
-        // Используем targetPitch напрямую (без массива pitchSamples)
-        float finalPitch = AuraUtil.smoothRot(p.getXRot(), targetPitch, 0.35f);
-        float finalYaw = AuraUtil.smoothRot(p.getYRot(), targetYaw, 0.35f);
+        // Ускорили с 0.35 до 0.7 (почти мгновенно)
+        float finalPitch = AuraUtil.smoothRot(p.getXRot(), targetPitch, 0.7f);
+        float finalYaw = AuraUtil.smoothRot(p.getYRot(), targetYaw, 0.7f);
 
         if (hitAge <= 4 && ticks[2] % 2f == 0f) finalYaw = p.getYRot();
         float outPitch = aimMode.equals("FanTime") ? finalPitch : p.getXRot();
-        RotationManager.get().rotate(new Rotation(finalYaw + sw, outPitch + sh), 220f, 1, 1);
+        // Увеличили скорость с 220 до 360
+        RotationManager.get().rotate(new Rotation(finalYaw + sw, outPitch + sh), 360f, 1, 1);
     }
 
     private void rotateLegit(Minecraft mc, float targetYaw, float targetPitch) {
         var p = mc.player;
         if (p == null) return;
         float t = p.tickCount;
-        float sin = (float) ((Math.sin(t * 0.31) * 0.5 + Math.sin(t * 1.7 + 2.6) * 0.2) * 8.0) / 4.0f;
-        float finalYaw = AuraUtil.smoothRot(p.getYRot(), targetYaw, random(0.2f, 0.35f));
-        float finalPitch = AuraUtil.smoothRot(p.getXRot(), targetPitch, random(0.15f, 0.25f));
+        float sin = (float) (Math.sin(t * 0.31) * 0.15);
+
+        // Ускорили с 0.3 до 0.5
+        float finalYaw = AuraUtil.smoothRot(p.getYRot(), targetYaw, 0.5f);
+        float finalPitch = AuraUtil.smoothRot(p.getXRot(), targetPitch, 0.5f);
+
         if (ticks[3] >= 0f) {
-            finalPitch = AuraUtil.smoothRot(p.getXRot(), targetPitch, 0.35f);
-            sin /= 3f;
+            finalPitch = AuraUtil.smoothRot(p.getXRot(), targetPitch, 0.6f);
             if (!AuraUtil.aimsAt(p.getYRot(), p.getXRot(), attackRange, target, true))
-                finalYaw = AuraUtil.smoothRot(p.getYRot(), targetYaw, random(0.7f, 1f));
+                finalYaw = AuraUtil.smoothRot(p.getYRot(), targetYaw, 0.9f);
         }
-        if (ticks[5] >= 0f && hitAge >= 1 && ticks[2] % 5f == 0f)
-            finalPitch = AuraUtil.smoothRot(p.getXRot(), -targetPitch, 0.05f);
-        RotationManager.get().rotate(new Rotation(finalYaw + sin, finalPitch + sin), 180f, 1, 1);
+        RotationManager.get().rotate(new Rotation(finalYaw + sin, finalPitch + sin), 360f, 1, 1);
     }
 
     private void restoreSlot() {
@@ -240,6 +245,7 @@ public final class Aura extends Module {
         Stream<LivingEntity> s = StreamSupport.stream(mc.level.entitiesForRendering().spliterator(), false)
                 .filter(LivingEntity.class::isInstance).map(LivingEntity.class::cast)
                 .filter(e -> e != p && e.isAlive())
+                .filter(e -> AuraUtil.distanceSq(eye, e) <= reach * reach)  // <-- ФИЛЬТР
                 .filter(this::isValidTarget);
         if (!throughWalls) s = s.filter(e -> hasLoS(eye, e, reach));
         return s.min(order);

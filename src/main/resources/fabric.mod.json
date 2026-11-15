@@ -1,0 +1,33 @@
+{
+	"schemaVersion": 1,
+	"id": "orbitdlc",
+	"version": "${version}",
+	"name": "OrbitDLC",
+	"description": "OrbitDLC client mod.",
+	"authors": ["Biwer!", "Astrrrax!"],
+	"license": "CC0-1.0",
+	"icon": "assets/orbitdlc/black_hole.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.orbitdlc.OrbitDLC"
+		],
+		"client": [
+			"com.orbitdlc.client.OrbitDLCClient"
+		]
+	},
+	"accessWidener": "orbitdlc.accesswidener",
+	"mixins": [
+		"orbitdlc.mixins.json",
+		{
+			"config": "orbitdlc.client.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}

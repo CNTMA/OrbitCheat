@@ -111,5 +111,9 @@ public final class OrbitDLCClient implements ClientModInitializer {
         modules.register(Aim.INSTANCE);
         ClientTickEvents.START_CLIENT_TICK.register(Aim.INSTANCE::tick);
         modules.register(AutoTool.INSTANCE);
+        ClientTickEvents.END_CLIENT_TICK.register(mc -> {
+            AutoTool.INSTANCE.tick(mc);
+        });
+
     }
 }

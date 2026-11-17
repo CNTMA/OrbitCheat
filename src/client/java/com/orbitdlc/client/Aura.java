@@ -5,13 +5,12 @@ import com.orbitdlc.client.module.Category;
 import com.orbitdlc.client.module.Module;
 import com.orbitdlc.client.util.AuraUtil;
 import com.orbitdlc.client.util.Rotation;
-import com.orbitdlc.client.util.RotationManager;
 import net.minecraft.client.Minecraft;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.util.Mth;
-import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.ambient.AmbientCreature;
 import net.minecraft.world.entity.animal.Animal;
 import net.minecraft.world.entity.animal.allay.Allay;
@@ -30,8 +29,7 @@ import java.util.stream.StreamSupport;
 public final class Aura extends Module {
     static final Aura INSTANCE = new Aura();
 
-    // === Настройки ===
-    private String aimMode = "FanTime";        // FanTime | FanTimeFOV | Legit
+    private String aimMode = "FanTime";
     private boolean targetNoArmor = true;
     private boolean targetHostiles = false;
     private boolean targetAnimals = false;
@@ -46,15 +44,27 @@ public final class Aura extends Module {
     private boolean noWallCheck = true;
     private boolean shieldBreak = true;
     private boolean smartSprint = false;
-    private String targetPriority = "Crosshair"; // Crosshair | Distance | HP
-    private String moveCorrection = "Focus";
-    private String targetVisual = "Spheres";
+    private boolean antiGrim = true;
+    private String targetPriority = "Crosshair";
+    private String moveCorrection = "Follow"; // было "Focus"
 
-    // === Состояние ===
     private LivingEntity target;
     private final float[] ticks = {-1, -1, -1, -1, 0, -1, -1, -1, -1, -1, -1, -1};
+    private final float[] pitchSamples = new float[30];
     private int hitAge = 0;
+    private int aimTicks = 0;
     private int originalSlot = -1;
+    public double reach;
+    // Зашитые идеальные настройки наводки
+    // Зашитые идеальные настройки наводки
+    private final float yawSpeed = 26f;
+    private final float pitchSpeed = 25f;
+    private final float smoothFactor = 0.18f; // <-- УМЕНЬШИЛИ ДЛЯ ПЛАВНОСТИ (было 0.59f)
+    private final float predictTicks = 2.7f;
+    private final boolean antiJitter = true; // 27 на слайдере = 2.7 тика
+    // Плавные значения скоростей (нарастают от 0 до максимума)
+    private float currentYawSpeed = 0f;
+    private float currentPitchSpeed = 0f;
 
     private Aura() { super("aura", Category.COMBAT); }
 
@@ -64,19 +74,34 @@ public final class Aura extends Module {
         ticks[10] = 0f;
         ticks[11] = 0f;
         var p = Minecraft.getInstance().player;
+        Arrays.fill(pitchSamples, p != null ? p.getXRot() : 0f);
         target = null;
-        RotationManager.get().reset();
+        hitAge = 0;
     }
 
     @Override protected void onDisable() {
         ticks[10] = 0f;
         target = null;
-        RotationManager.get().reset();
         restoreSlot();
+        com.orbitdlc.client.util.MoveUtil.setFollowing(false); // <--- ДОБАВИТЬ ЭТО
     }
 
+    /** Реальный лимит атрибута — сервер не засчитает удар дальше этого значения. */
+    private double getRealReach() {
+        var p = Minecraft.getInstance().player;
+        if (p == null) return 3.0;
+        var attr = p.getAttribute(Attributes.ENTITY_INTERACTION_RANGE);
+        return attr == null ? 3.0 : Math.min(attr.getValue(), 64.0);
+    }
+
+    private boolean pendingClick = false;
+
     void tick(Minecraft mc) {
-        if (!isEnabled() || mc.player == null || mc.level == null) return;
+        if (!isEnabled() || mc.player == null || mc.level == null) {
+            com.orbitdlc.client.util.MoveUtil.setFollowing(false);
+            return;
+        }
+
         if (target == null || !isValidTarget(target)) {
             LivingEntity prev = target;
             boolean fresh = prev == null || !isValidTarget(prev);
@@ -86,152 +111,163 @@ public final class Aura extends Module {
             if (target != prev && target != null) {
                 ticks[10] = 0f;
                 ticks[11] = 0f;
+                Arrays.fill(pitchSamples, mc.player.getXRot());
             }
         }
+
         restoreSlot();
-        if (target == null) { ticks[8] = 1f; hitAge++; return; }
-        performAttack(mc);
-        updateRotation(mc);
-        performAttack(mc);
-        hitAge++;
-    }
 
-    private void performAttack(Minecraft mc) {
-        var p = mc.player;
-        if (p == null || target == null || mc.gameMode == null) return;
+        if (target == null) {
+            ticks[8] = 1f;
+            com.orbitdlc.client.util.MoveUtil.setFollowing(false);
 
-        if (shieldBreak && target.isBlocking()) {
-            if (p.getMainHandItem().is(ItemTags.AXES)) {
-                mc.gameMode.attack(p, target);
-            }
-            int axe = findAxeInHotbar();
-            if (axe != -1 && p.getInventory().getSelectedSlot() != axe) {
-                if (originalSlot == -1) originalSlot = p.getInventory().getSelectedSlot();
-                p.getInventory().setSelectedSlot(axe);
-            }
+            // СБРОС ВСЕХ ПЛАВНЫХ ЗНАЧЕНИЙ
+            currentYawSpeed = 0f;
+            currentPitchSpeed = 0f;
+            currentPredictTicks = 0f;
+
+            hitAge++;
+            return;
         }
 
+        // ОДИН вызов updateRotation — он двигает камеру
+        updateRotation(mc);
+
+        // Атака (если можно)
         if (canAttackNow(mc)) {
-            if (onlyCrit && p.isSprinting()) {
-                p.setSprinting(false);
+            if (mc.player.isSprinting()) {
+                mc.player.setSprinting(false);
             }
-            ticks[3] = 0f;
-            mc.gameMode.attack(p, target);
+            ((com.orbitdlc.client.mixin.MinecraftAccessor) mc).orbitdlc$startAttack();
             hitAge = 0;
             ticks[5] = random(8f, 10f);
             ticks[9] = (int) random(9f, 13f);
             if (ticks[2] == -1f) ticks[4] = (int) random(30f, 35f);
             ticks[2] += 1f;
         }
+
+        hitAge++;
     }
+
 
     private boolean canAttackNow(Minecraft mc) {
         var p = mc.player;
         if (p == null || target == null) return false;
-        if (noItemInUse && p.isUsingItem() && p.getUseItemRemainingTicks() > 0 && hitAge >= 8) {
-            hitAge = 8;
-            return false;
-        }
+
+        if (p.getAttackStrengthScale(0.5f) < 1.0f) return false;
+
+        double reach = Math.min(attackRange, 3.0) - 0.05;
+        if (!AuraUtil.withinReach(target, reach)) return false;
+
         if (noContainerOpen && mc.gui.screen() != null
                 && !(mc.gui.screen() instanceof ClickGui)
                 && !(mc.gui.screen() instanceof ModuleSettings)) return false;
-        // Дистанция: attackRange + половина extraRange (запас на движущуюся цель)
-        // Полная дистанция (attackRange + extraRange) — бьём на самом пределе
-        double reach = attackRange + extraRange;
-        if (!AuraUtil.withinReach(target, reach)) return false;
 
-        // Спринт-сброс делаем ДО проверки кулдауна
-        if (onlyCrit && p.isSprinting()) {
-            p.setSprinting(false);
-        }
-
-        if (p.fallDistance > 1.5f) {
-            if (p.getCooldowns().isOnCooldown(p.getMainHandItem()) || hitAge <= 0) return false;
-        } else if (p.getAttackStrengthScale(0.5f) < 0.8f || hitAge < 1) {
-            return false;
-        }
-
-        // Крит-логика
-        boolean critReady = p.fallDistance > 0.0f && !p.onGround() && !p.isInWater()
-                && !p.onClimbable() && p.getVehicle() == null
-                && !p.hasEffect(net.minecraft.world.effect.MobEffects.BLINDNESS)
-                && !p.isSprinting();
-        boolean canHit = critReady
-                || (adaptiveHit && p.onGround() && !mc.options.keyJump.isDown())
-                || !AuraUtil.notInLiquid();
-        // onlyCrit: если true и крит невозможен — не бьём (кроме случая, когда цель может убежать)
-        //if (onlyCrit && !critReady && target.getHealth() > 6.0f) return false;
-        return canHit;
+        return true;
     }
+
+    // Поле для плавного наращивания предсказания (1 -> 2 -> 3 ... 27)
+    private float currentPredictTicks = 0f;
 
     private void updateRotation(Minecraft mc) {
         var p = mc.player;
         if (p == null || target == null) return;
-        Vec3 eye = p.getEyePosition();
 
-        // Предсказываем позицию цели на 1.5 тика вперёд (учитываем прыжок)
-        // Предсказание на 2 тика с учётом гравитации (для прыгающих/падающих)
-        var vel = target.getDeltaMovement();
-        double predictedY = vel.y - 0.08; // базовая гравитация игрока
-        if (!target.onGround()) {
-            vel = new Vec3(vel.x, predictedY * 0.98, vel.z);
+        Vec3 velocity = target.getDeltaMovement();
+        // Проверяем, движется ли цель по горизонтали
+        boolean isMoving = (velocity.x * velocity.x + velocity.z * velocity.z > 0.0025);
+
+        // Если цель бежит — цель предсказания 2.7 (27 в GUI). Если стоит — 0.
+        float targetTick = isMoving ? predictTicks : 0f;
+
+        // ПЛАВНОЕ НАРАЩИВАНИЕ (шаг 0.1, как ты просил: 1, 2, 3... 27)
+        // 0.1f в коде = 1 в GUI.
+        float step = 0.1f;
+        if (currentPredictTicks < targetTick) {
+            currentPredictTicks = Math.min(targetTick, currentPredictTicks + step);
+        } else if (currentPredictTicks > targetTick) {
+            currentPredictTicks = Math.max(targetTick, currentPredictTicks - step);
         }
-        Vec3 targetPos = target.position().add(vel.scale(1.0));
-        Vec3 aimCenter = new Vec3(
-                targetPos.x,
-                targetPos.y + target.getBbHeight() * 0.5,
-                targetPos.z
-        );
 
-        Vec3 offset = aimCenter.subtract(eye);
+        // 1. Предсказание ЦЕЛИ на основе плавного наращивания
+        double predictX = velocity.x * currentPredictTicks;
+        double predictZ = velocity.z * currentPredictTicks;
+        double predictY = target.onGround() ? velocity.y * currentPredictTicks : 0;
+
+        // 2. Предсказание ИГРОКА (чтобы не трясло при твоем прыжке)
+        Vec3 playerVelocity = p.getDeltaMovement();
+        Vec3 playerEye = p.getEyePosition().add(playerVelocity.scale(currentPredictTicks * 0.5));
+
+        // 3. Точка прицеливания (центр + предсказание)
+        Vec3 aimPos = target.getBoundingBox().getCenter().add(predictX, predictY, predictZ);
+        Vec3 offset = aimPos.subtract(playerEye);
 
         float targetYaw = (float) Mth.wrapDegrees(Math.toDegrees(Math.atan2(offset.z, offset.x)) - 90.0);
         float targetPitch = (float) -Math.toDegrees(Math.atan2(offset.y, Math.hypot(offset.x, offset.z)));
 
+        // 4. Скорость поворота
+        float currentPitchSpeed = pitchSpeed;
+        if (!p.onGround()) currentPitchSpeed *= 1.3f;
+
         switch (aimMode) {
-            case "FanTime", "FanTimeFOV" -> rotateFanTime(mc, targetYaw, targetPitch);
-            case "Legit" -> rotateLegit(mc, targetYaw, targetPitch);
+            case "FanTime", "FanTimeFOV" -> rotateFanTime(mc, targetYaw, targetPitch, currentPitchSpeed);
+            case "Legit" -> rotateLegit(mc, targetYaw, targetPitch, currentPitchSpeed);
         }
-        ticks[3] -= 1;
-        ticks[5] -= 1;
-        ticks[8] -= 1;
         ticks[1] = (float) Mth.wrapDegrees(Math.toDegrees(Math.atan2(
                 target.getZ() - p.getZ(), target.getX() - p.getX())) - 90.0);
     }
 
-    private void rotateFanTime(Minecraft mc, float targetYaw, float targetPitch) {
-        var p = mc.player;
-        if (p == null) return;
-        float t = p.tickCount;
-        float sw = (float) (Math.sin(t * 0.4) * 0.12 + Math.sin(t * 0.95 + 1.4) * 0.08);
-        float sh = (float) (Math.cos(t * 0.5 + 0.7) * 0.10);
-
-        // Ускорили с 0.35 до 0.7 (почти мгновенно)
-        float finalPitch = AuraUtil.smoothRot(p.getXRot(), targetPitch, 0.7f);
-        float finalYaw = AuraUtil.smoothRot(p.getYRot(), targetYaw, 0.7f);
-
-        if (hitAge <= 4 && ticks[2] % 2f == 0f) finalYaw = p.getYRot();
-        float outPitch = aimMode.equals("FanTime") ? finalPitch : p.getXRot();
-        // Увеличили скорость с 220 до 360
-        RotationManager.get().rotate(new Rotation(finalYaw + sw, outPitch + sh), 360f, 1, 1);
+    /** Дробная доля между тиками (0..1) — для плавного синуса. */
+    private static float getPartialTick(Minecraft mc) {
+        try {
+            var tracker = mc.getClass().getMethod("getDeltaTracker").invoke(mc);
+            return (float) tracker.getClass().getMethod("getGameTimeDeltaPartialTick", boolean.class)
+                    .invoke(tracker, false);
+        } catch (Exception ignored) {}
+        try {
+            var timer = mc.getClass().getMethod("getTimer").invoke(mc);
+            return (float) timer.getClass().getMethod("getGameTimeDeltaPartialTick", boolean.class)
+                    .invoke(timer, false);
+        } catch (Exception ignored) {}
+        return 0f;
     }
 
-    private void rotateLegit(Minecraft mc, float targetYaw, float targetPitch) {
+    /** FanTime — оригинальная логика: ±5° по yaw, ±2° по pitch. */
+    private void rotateFanTime(Minecraft mc, float targetYaw, float targetPitch, float targetPitchSpeed) {
         var p = mc.player;
         if (p == null) return;
-        float t = p.tickCount;
-        float sin = (float) (Math.sin(t * 0.31) * 0.15);
 
-        // Ускорили с 0.3 до 0.5
-        float finalYaw = AuraUtil.smoothRot(p.getYRot(), targetYaw, 0.5f);
-        float finalPitch = AuraUtil.smoothRot(p.getXRot(), targetPitch, 0.5f);
+        if (currentYawSpeed < yawSpeed) currentYawSpeed = Math.min(yawSpeed, currentYawSpeed + 1.0f);
+        else if (currentYawSpeed > yawSpeed) currentYawSpeed = Math.max(yawSpeed, currentYawSpeed - 1.0f);
 
-        if (ticks[3] >= 0f) {
-            finalPitch = AuraUtil.smoothRot(p.getXRot(), targetPitch, 0.6f);
-            if (!AuraUtil.aimsAt(p.getYRot(), p.getXRot(), attackRange, target, true))
-                finalYaw = AuraUtil.smoothRot(p.getYRot(), targetYaw, 0.9f);
-        }
-        RotationManager.get().rotate(new Rotation(finalYaw + sin, finalPitch + sin), 360f, 1, 1);
+        if (currentPitchSpeed < targetPitchSpeed) currentPitchSpeed = Math.min(targetPitchSpeed, currentPitchSpeed + 1.0f);
+        else if (currentPitchSpeed > targetPitchSpeed) currentPitchSpeed = Math.max(targetPitchSpeed, currentPitchSpeed - 1.0f);
+
+        float deltaYaw = AuraUtil.getMouseDelta(p.getYRot(), targetYaw, currentYawSpeed, smoothFactor, antiJitter);
+        float deltaPitch = AuraUtil.getMouseDelta(p.getXRot(), targetPitch, currentPitchSpeed, smoothFactor, antiJitter);
+
+        p.setYRot(p.getYRot() + deltaYaw);
+        p.setXRot(Mth.clamp(p.getXRot() + deltaPitch, -90f, 90f));
+    }
+
+    private void rotateLegit(Minecraft mc, float targetYaw, float targetPitch, float targetPitchSpeed) {
+        var p = mc.player;
+        if (p == null) return;
+
+        float legitMaxYaw = yawSpeed * 0.9f;
+        float legitMaxPitch = targetPitchSpeed * 0.9f;
+
+        if (currentYawSpeed < legitMaxYaw) currentYawSpeed = Math.min(legitMaxYaw, currentYawSpeed + 1.2f);
+        else if (currentYawSpeed > legitMaxYaw) currentYawSpeed = Math.max(legitMaxYaw, currentYawSpeed - 1.2f);
+
+        if (currentPitchSpeed < legitMaxPitch) currentPitchSpeed = Math.min(legitMaxPitch, currentPitchSpeed + 1.2f);
+        else if (currentPitchSpeed > legitMaxPitch) currentPitchSpeed = Math.max(legitMaxPitch, currentPitchSpeed - 1.2f);
+
+        float deltaYaw = AuraUtil.getMouseDelta(p.getYRot(), targetYaw, currentYawSpeed, smoothFactor * 0.8f, antiJitter);
+        float deltaPitch = AuraUtil.getMouseDelta(p.getXRot(), targetPitch, currentPitchSpeed, smoothFactor * 0.8f, antiJitter);
+
+        p.setYRot(p.getYRot() + deltaYaw);
+        p.setXRot(Mth.clamp(p.getXRot() + deltaPitch, -90f, 90f));
     }
 
     private void restoreSlot() {
@@ -256,7 +292,8 @@ public final class Aura extends Module {
         if (mc.player == null || mc.level == null) return Optional.empty();
         var p = mc.player;
         Vec3 eye = p.getEyePosition();
-        double reach = attackRange + extraRange;
+        // Дистанция поиска: атрибут + extraRange (но не больше attackRange + extraRange)
+        double reach = Math.min(attackRange, getRealReach()) + extraRange;
         Comparator<LivingEntity> order = switch (targetPriority) {
             case "Distance" -> Comparator.comparingDouble(AuraUtil::distanceSq);
             case "HP" -> Comparator.comparingDouble(LivingEntity::getHealth);
@@ -269,7 +306,7 @@ public final class Aura extends Module {
         Stream<LivingEntity> s = StreamSupport.stream(mc.level.entitiesForRendering().spliterator(), false)
                 .filter(LivingEntity.class::isInstance).map(LivingEntity.class::cast)
                 .filter(e -> e != p && e.isAlive())
-                .filter(e -> AuraUtil.distanceSq(eye, e) <= reach * reach)  // <-- ФИЛЬТР
+                .filter(e -> AuraUtil.distanceSq(eye, e) <= reach * reach)
                 .filter(this::isValidTarget);
         if (!throughWalls) s = s.filter(e -> hasLoS(eye, e, reach));
         return s.min(order);
@@ -296,24 +333,20 @@ public final class Aura extends Module {
             if (friend) return targetFriends;
             return !naked || targetNoArmor;
         }
-        // Hostiles: монстры, гаст, дракон, слизь, магма-куб, железный голем, снежный голем
         if (e instanceof Monster || e instanceof Ghast || e instanceof EnderDragon
                 || isKind(e, "Slime", "MagmaCube", "IronGolem", "SnowGolem"))
             return targetHostiles;
-        // Animals: только животные, амбиентные, аллей
         if (e instanceof Animal || e instanceof AmbientCreature || e instanceof Allay)
             return targetAnimals;
         return false;
     }
 
-    /** Проверка по simpleName класса — работает независимо от маппингов/пакетов. */
-    private static boolean isKind(LivingEntity e, String... simpleNames) {
+    private static boolean isKind(LivingEntity e, String... names) {
         String sn = e.getClass().getSimpleName();
-        for (String n : simpleNames) if (sn.equals(n)) return true;
+        for (String n : names) if (sn.equals(n)) return true;
         return false;
     }
 
-    /** OrbitFriends API неизвестен — пробуем рефлексией. После запуска можно заменить на прямой вызов. */
     private static boolean isFriendSafe(String name) {
         for (String method : new String[]{"isFriend", "contains", "has", "isFriendByName"}) {
             try {
@@ -324,7 +357,6 @@ public final class Aura extends Module {
         return false;
     }
 
-    // === Настройки ===
     @Override public JsonObject saveSettings() {
         var s = super.saveSettings();
         s.addProperty("aimMode", aimMode);
@@ -344,7 +376,10 @@ public final class Aura extends Module {
         s.addProperty("smartSprint", smartSprint);
         s.addProperty("targetPriority", targetPriority);
         s.addProperty("moveCorrection", moveCorrection);
-        s.addProperty("targetVisual", targetVisual);
+        s.addProperty("yawSpeed", yawSpeed);
+        s.addProperty("pitchSpeed", pitchSpeed);
+        s.addProperty("smoothFactor", smoothFactor);
+        s.addProperty("predictTicks", predictTicks);
         return s;
     }
 
@@ -365,8 +400,7 @@ public final class Aura extends Module {
         shieldBreak = !s.has("shieldBreak") || s.get("shieldBreak").getAsBoolean();
         smartSprint = s.has("smartSprint") && s.get("smartSprint").getAsBoolean();
         targetPriority = s.has("targetPriority") ? s.get("targetPriority").getAsString() : "Crosshair";
-        moveCorrection = s.has("moveCorrection") ? s.get("moveCorrection").getAsString() : "Focus";
-        targetVisual = s.has("targetVisual") ? s.get("targetVisual").getAsString() : "Spheres";
+        moveCorrection = s.has("moveCorrection") ? s.get("moveCorrection").getAsString() : "Follow";
     }
 
     @Override public String description() { return "Automatically aims and attacks nearby targets."; }
@@ -375,6 +409,8 @@ public final class Aura extends Module {
         return new ModuleSettings("Aura", parent) {
             @Override protected void init() {
                 int row = 0;
+
+                // === 1. Режим наведения ===
                 row = choicesAt(java.util.List.of("FanTime", "FanTime FOV", "Legit"),
                         i -> switch (i) {
                             case 0 -> aimMode.equals("FanTime");
@@ -386,16 +422,50 @@ public final class Aura extends Module {
                             case 1 -> "FanTimeFOV";
                             default -> "Legit";
                         }, row);
-                row += 4; // отступ после кнопок
+                row += 4;
+
+                // === 2. Режим движения ===
+                row = choicesAt(java.util.List.of("Focus", "Free", "Follow"),
+                        i -> switch (i) {
+                            case 0 -> moveCorrection.equals("Focus");
+                            case 1 -> moveCorrection.equals("Free");
+                            default -> moveCorrection.equals("Follow");
+                        },
+                        i -> moveCorrection = switch (i) {
+                            case 0 -> "Focus";
+                            case 1 -> "Free";
+                            default -> "Follow";
+                        }, row);
+                row += 4;
+
+                // === 3. Приоритет цели ===
+                row = choicesAt(java.util.List.of("Crosshair", "Distance", "HP"),
+                        i -> switch (i) {
+                            case 0 -> targetPriority.equals("Crosshair");
+                            case 1 -> targetPriority.equals("Distance");
+                            default -> targetPriority.equals("HP");
+                        },
+                        i -> targetPriority = switch (i) {
+                            case 0 -> "Crosshair";
+                            case 1 -> "Distance";
+                            default -> "HP";
+                        }, row);
+                row += 4;
+
+                // === 4. Цели ===
                 toggleAt("No armor", row, () -> targetNoArmor, () -> targetNoArmor = !targetNoArmor); row += 22;
                 toggleAt("Hostiles", row, () -> targetHostiles, () -> targetHostiles = !targetHostiles); row += 22;
                 toggleAt("Animals", row, () -> targetAnimals, () -> targetAnimals = !targetAnimals); row += 22;
                 toggleAt("Friends", row, () -> targetFriends, () -> targetFriends = !targetFriends); row += 22;
                 toggleAt("Players", row, () -> targetPlayers, () -> targetPlayers = !targetPlayers); row += 22;
+
+                // === 5. Дистанции ===
                 slider("Attack range", " m", row, 1, 60,
                         () -> Math.round(attackRange * 10), v -> attackRange = v / 10f); row += 24;
                 slider("Extra range", " m", row, 1, 30,
                         () -> Math.round(extraRange * 10), v -> extraRange = v / 10f); row += 24;
+
+                // === 6. Флаги поведения ===
                 toggleAt("Only crits", row, () -> onlyCrit, () -> onlyCrit = !onlyCrit); row += 22;
                 toggleAt("Adaptive hit", row, () -> adaptiveHit, () -> adaptiveHit = !adaptiveHit); row += 22;
                 toggleAt("No item in use", row, () -> noItemInUse, () -> noItemInUse = !noItemInUse); row += 22;
@@ -403,6 +473,7 @@ public final class Aura extends Module {
                 toggleAt("No wall check", row, () -> noWallCheck, () -> noWallCheck = !noWallCheck); row += 22;
                 toggleAt("Shield break", row, () -> shieldBreak, () -> shieldBreak = !shieldBreak); row += 22;
                 toggleAt("Smart sprint", row, () -> smartSprint, () -> smartSprint = !smartSprint); row += 22;
+                toggleAt("Anti-Grim", row, () -> antiGrim, () -> antiGrim = !antiGrim); row += 22;
             }
         };
     }

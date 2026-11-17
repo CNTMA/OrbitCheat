@@ -50,17 +50,26 @@ public final class AuraUtil {
     }
 
     public static boolean aimsAt(float yaw, float pitch, double dist, Entity e, boolean throughWalls) {
+        return aimsAt(yaw, pitch, dist, e, throughWalls, Vec3.ZERO);
+    }
+
+    public static boolean aimsAt(float yaw, float pitch, double dist, Entity e, boolean throughWalls, Vec3 predict) {
         var p = Minecraft.getInstance().player;
-        return p != null && aimsAt(p.getEyePosition(), yaw, pitch, dist, e, throughWalls);
+        return p != null && aimsAt(p.getEyePosition(), yaw, pitch, dist, e, throughWalls, predict);
     }
 
     public static boolean aimsAt(Vec3 from, float yaw, float pitch, double dist, Entity e, boolean throughWalls) {
+        return aimsAt(from, yaw, pitch, dist, e, throughWalls, Vec3.ZERO);
+    }
+
+    public static boolean aimsAt(Vec3 from, float yaw, float pitch, double dist, Entity e, boolean throughWalls, Vec3 predict) {
         var mc = Minecraft.getInstance();
         if (mc.player == null || mc.level == null) return false;
         Vec3 end = from.add(Vec3.directionFromRotation(pitch, yaw).scale(dist));
-        Optional<Vec3> hit = e.getBoundingBox().contains(from)
+        AABB bb = e.getBoundingBox().move(predict);
+        Optional<Vec3> hit = bb.contains(from)
                 ? Optional.of(from)
-                : e.getBoundingBox().clip(from, end);
+                : bb.clip(from, end);
         if (hit.isEmpty()) return false;
         if (!throughWalls) {
             var block = mc.level.clip(new ClipContext(from, hit.get(), ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, mc.player));
@@ -109,11 +118,15 @@ public final class AuraUtil {
 
     /** Возвращает направление от `eye` к точке прицеливания (или Vec3.ZERO, если не видно). */
     public static Vec3 getAimPoint(Vec3 eye, LivingEntity target, double reach, boolean throughWalls) {
+        return getAimPoint(eye, target, reach, throughWalls, Vec3.ZERO);
+    }
+
+    public static Vec3 getAimPoint(Vec3 eye, LivingEntity target, double reach, boolean throughWalls, Vec3 predict) {
         var mc = Minecraft.getInstance();
         if (mc.player == null || mc.level == null) return Vec3.ZERO;
-        AABB bb = target.getBoundingBox();
+        AABB bb = target.getBoundingBox().move(predict);
         double mx = (bb.minX + bb.maxX) * 0.5, mz = (bb.minZ + bb.maxZ) * 0.5;
-        Vec3 targetEye = target.getEyePosition();
+        Vec3 targetEye = target.getEyePosition().add(predict);
         double d = eye.distanceTo(targetEye);
         double ay = Mth.lerp(Mth.clamp(d / 3.0, 0, 1), bb.minY, Mth.clamp(eye.y, bb.minY, bb.maxY));
         List<Vec3> pts = new ArrayList<>();
@@ -133,17 +146,19 @@ public final class AuraUtil {
                     if (d2.length() > reach + pad) continue;
                     float yaw = (float) Mth.wrapDegrees(Math.toDegrees(Math.atan2(d2.z, d2.x)) - 90.0);
                     float pitch = (float) -Math.toDegrees(Math.atan2(d2.y, Math.hypot(d2.x, d2.z)));
-                    if (aimsAt(eye, yaw, pitch, (float) (reach + pad), target, walls)) ok.add(p);
+                    if (aimsAt(eye, yaw, pitch, (float) (reach + pad), target, walls, predict)) ok.add(p);
                 }
                 if (!ok.isEmpty()) {
                     Vec3 c = ok.stream().reduce(Vec3.ZERO, Vec3::add).scale(1.0 / ok.size());
-                    return ok.stream().min(Comparator.comparingDouble(p -> p.distanceToSqr(c))).get().subtract(eye);
+                    Vec3 result = ok.stream().min(Comparator.comparingDouble(p -> p.distanceToSqr(c))).get().subtract(eye);
+                    return result;
                 }
                 if (!walls) break;
             }
         }
         return Vec3.ZERO;
     }
+
 
     public static boolean notInLiquid() {
         var mc = Minecraft.getInstance();
@@ -161,12 +176,16 @@ public final class AuraUtil {
         return mc.player != null && notInLiquid() && mc.player.fallDistance > 0f && !mc.player.onGround();
     }
 
-    public static float smoothRot(float start, float end, float amount) {
-        float a = Mth.clamp(amount, 0, 1);
-        float d = Mth.wrapDegrees(end - start);
-        if (Math.abs(d) < 0.5f) return end;
-        float stepped = Mth.wrapDegrees(start + d * a);
-        float patched = RotationManager.patchGCD(start, stepped);
-        return Math.abs(Mth.wrapDegrees(end - patched)) < 0.5f ? end : patched;
+    public static float getMouseDelta(float start, float end, float maxStep, float smoothFactor, boolean antiJitter) {
+        float diff = Mth.wrapDegrees(end - start);
+
+        // Если antiJitter включён — не двигаем камеру при разнице < 0.5°
+        if (antiJitter && Math.abs(diff) < 0.05f) return 0; // Доводим до идеала, но плавно
+        if (Math.abs(diff) < 0.05f) return diff;
+
+        float step = Math.abs(diff) * smoothFactor;
+        if (step > maxStep) step = maxStep;
+
+        return Math.signum(diff) * step;
     }
 }

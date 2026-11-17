@@ -201,12 +201,12 @@ public final class ClickGui extends Screen {
 
     private static Column columnFor(Module module) {
         return switch (module.id()) {
-            case "aura", "auto_totem", "mace_swap", "mace_helper", "hitboxes", "target_esp" -> Column.COMBAT;
+            case "aura", "aim", "trigger_bot", "auto_totem", "mace_swap", "mace_helper", "hitboxes", "target_esp" -> Column.COMBAT;
             case "sprint", "trail", "elytra_swap", "quick_rocket", "jump_circles", "jump_particles", "landing_particles", "particle_trails",
-                    "steady_view" -> Column.MOVEMENT;
+                    "steady_view", "autotool" -> Column.MOVEMENT;
             case "skin", "nametags", "viewmodel", "swing_animations", "shader_hand", "chinahat", "click_pearl", "held_durability" -> Column.PLAYER;
             case "theme", "gui", "no_render", "aspectratio" -> Column.OTHER;
-            case "third_person" -> Column.VISUALS;
+            case "third_person", "xray" -> Column.VISUALS;
             default -> module.category() == Category.VISUALS ? Column.VISUALS : Column.OTHER;
         };
     }
@@ -215,6 +215,9 @@ public final class ClickGui extends Screen {
         return switch (module) {
             case Aura aura -> aura.settings(this);
             case AutoTotem totem -> totem.settings(this);
+            case TriggerBot trigger -> trigger.settings(this);
+            case Aim aim -> aim.settings(this);
+            case AutoTool autotool -> autotool.settings(this);
             case ThirdPerson tp -> tp.settings(this);
             case Sprint sprint -> sprint.settings(this);
             case BlockOverlay overlay -> overlay.settings(this);

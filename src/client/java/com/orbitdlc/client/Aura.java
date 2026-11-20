@@ -46,7 +46,8 @@ public final class Aura extends Module {
     private boolean smartSprint = false;
     private boolean antiGrim = true;
     private String targetPriority = "Crosshair";
-    private String moveCorrection = "Follow"; // было "Focus"
+    private String moveCorrection = "Follow";
+    private boolean autoJump = true; // Авто-прыжок для критов// было "Focus"
 
     private LivingEntity target;
     private final float[] ticks = {-1, -1, -1, -1, 0, -1, -1, -1, -1, -1, -1, -1};
@@ -59,12 +60,13 @@ public final class Aura extends Module {
     // Зашитые идеальные настройки наводки
     private final float yawSpeed = 26f;
     private final float pitchSpeed = 25f;
-    private final float smoothFactor = 0.18f; // <-- УМЕНЬШИЛИ ДЛЯ ПЛАВНОСТИ (было 0.59f)
+    private final float smoothFactor = 0.35f; // <-- УМЕНЬШИЛИ ДЛЯ ПЛАВНОСТИ (было 0.59f)
     private final float predictTicks = 2.7f;
     private final boolean antiJitter = true; // 27 на слайдере = 2.7 тика
     // Плавные значения скоростей (нарастают от 0 до максимума)
     private float currentYawSpeed = 0f;
     private float currentPitchSpeed = 0f;
+    private float currentSmoothFactor = 0.01f; // Начинаем с 1% (1 в GUI)
 
     private Aura() { super("aura", Category.COMBAT); }
 
@@ -116,6 +118,7 @@ public final class Aura extends Module {
         }
 
         restoreSlot();
+        var p = mc.player;
 
         if (target == null) {
             ticks[8] = 1f;
@@ -130,14 +133,43 @@ public final class Aura extends Module {
             return;
         }
 
+        // ПРЫЖОК ДЛЯ КРИТА (автоматически)
+        if (onlyCrit && autoJump && p.onGround() && !p.isInWater() && !p.onClimbable()) {
+            double reach = Math.min(attackRange, 3.0) - 0.05;
+            if (AuraUtil.withinReach(target, reach)) {
+                // Прыгаем только если меч готов к удару (чтобы не прыгать впустую)
+                if (p.getAttackStrengthScale(0.5f) >= 0.9f) {
+                    p.jumpFromGround();
+                }
+            }
+        }
+
+
         // ОДИН вызов updateRotation — он двигает камеру
         updateRotation(mc);
 
-        // Атака (если можно)
-        if (canAttackNow(mc)) {
-            if (mc.player.isSprinting()) {
-                mc.player.setSprinting(false);
+        // ПРЫЖОК ДЛЯ КРИТА (автоматически)
+        if (onlyCrit && autoJump && p.onGround() && !p.isInWater() && !p.onClimbable()) {
+            double reach = Math.min(attackRange, 3.0) - 0.05;
+            if (AuraUtil.withinReach(target, reach)) {
+                // Прыгаем только если меч готов к удару (чтобы не прыгать впустую)
+                if (p.getAttackStrengthScale(0.5f) >= 0.9f) {
+                    p.jumpFromGround();
+                }
             }
+        }
+
+        // Атака
+        if (canAttackNow(mc)) {
+            // 1. Если спринтим — сбрасываем спринт и ЖДЕМ следующего тика
+            if (p.isSprinting()) {
+                p.setSprinting(false);
+                mc.getConnection().send(new net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket(
+                        p, net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket.Action.STOP_SPRINTING));
+                return;
+            }
+
+            // 2. Бьем (в следующем тике, когда уже не спринтим и, возможно, падаем)
             ((com.orbitdlc.client.mixin.MinecraftAccessor) mc).orbitdlc$startAttack();
             hitAge = 0;
             ticks[5] = random(8f, 10f);
@@ -162,6 +194,14 @@ public final class Aura extends Module {
         if (noContainerOpen && mc.gui.screen() != null
                 && !(mc.gui.screen() instanceof ClickGui)
                 && !(mc.gui.screen() instanceof ModuleSettings)) return false;
+
+        // ЕСЛИ ВКЛЮЧЕНЫ ТОЛЬКО КРИТЫ — ПРОВЕРЯЕМ ПАДЕНИЕ
+        if (onlyCrit) {
+            // Крит возможен, только если мы падаем и не в воде
+            if (p.onGround() || p.isInWater() || p.onClimbable() || p.isSprinting()) {
+                return false;
+            }
+        }
 
         return true;
     }
@@ -243,9 +283,12 @@ public final class Aura extends Module {
         if (currentPitchSpeed < targetPitchSpeed) currentPitchSpeed = Math.min(targetPitchSpeed, currentPitchSpeed + 1.0f);
         else if (currentPitchSpeed > targetPitchSpeed) currentPitchSpeed = Math.max(targetPitchSpeed, currentPitchSpeed - 1.0f);
 
+        // Увеличиваем smoothFactor, чтобы успевать.
+        // Но применяем его мелкими шагами через плавный расчет.
         float deltaYaw = AuraUtil.getMouseDelta(p.getYRot(), targetYaw, currentYawSpeed, smoothFactor, antiJitter);
         float deltaPitch = AuraUtil.getMouseDelta(p.getXRot(), targetPitch, currentPitchSpeed, smoothFactor, antiJitter);
 
+        // ОДИН шаг за тик, но очень маленький (благодаря smoothFactor = 0.09)
         p.setYRot(p.getYRot() + deltaYaw);
         p.setXRot(Mth.clamp(p.getXRot() + deltaPitch, -90f, 90f));
     }
@@ -263,11 +306,18 @@ public final class Aura extends Module {
         if (currentPitchSpeed < legitMaxPitch) currentPitchSpeed = Math.min(legitMaxPitch, currentPitchSpeed + 1.2f);
         else if (currentPitchSpeed > legitMaxPitch) currentPitchSpeed = Math.max(legitMaxPitch, currentPitchSpeed - 1.2f);
 
-        float deltaYaw = AuraUtil.getMouseDelta(p.getYRot(), targetYaw, currentYawSpeed, smoothFactor * 0.8f, antiJitter);
-        float deltaPitch = AuraUtil.getMouseDelta(p.getXRot(), targetPitch, currentPitchSpeed, smoothFactor * 0.8f, antiJitter);
+        float totalDeltaYaw = AuraUtil.getMouseDelta(p.getYRot(), targetYaw, currentYawSpeed, smoothFactor * 0.16f, antiJitter);
+        float totalDeltaPitch = AuraUtil.getMouseDelta(p.getXRot(), targetPitch, currentPitchSpeed, smoothFactor * 0.16f, antiJitter);
 
-        p.setYRot(p.getYRot() + deltaYaw);
-        p.setXRot(Mth.clamp(p.getXRot() + deltaPitch, -90f, 90f));
+        // РАЗБИВАЕМ НА МИКРО-ШАГИ (10 шагов за тик)
+        int steps = 10;
+        float microYaw = totalDeltaYaw / steps;
+        float microPitch = totalDeltaPitch / steps;
+
+        for (int i = 0; i < steps; i++) {
+            p.setYRot(p.getYRot() + microYaw);
+            p.setXRot(Mth.clamp(p.getXRot() + microPitch, -90f, 90f));
+        }
     }
 
     private void restoreSlot() {
@@ -380,6 +430,7 @@ public final class Aura extends Module {
         s.addProperty("pitchSpeed", pitchSpeed);
         s.addProperty("smoothFactor", smoothFactor);
         s.addProperty("predictTicks", predictTicks);
+        s.addProperty("autojump", autoJump);
         return s;
     }
 
@@ -401,6 +452,7 @@ public final class Aura extends Module {
         smartSprint = s.has("smartSprint") && s.get("smartSprint").getAsBoolean();
         targetPriority = s.has("targetPriority") ? s.get("targetPriority").getAsString() : "Crosshair";
         moveCorrection = s.has("moveCorrection") ? s.get("moveCorrection").getAsString() : "Follow";
+        autoJump = s.has("autoJump") && s.get("autoJump").getAsBoolean();
     }
 
     @Override public String description() { return "Automatically aims and attacks nearby targets."; }
@@ -474,6 +526,7 @@ public final class Aura extends Module {
                 toggleAt("Shield break", row, () -> shieldBreak, () -> shieldBreak = !shieldBreak); row += 22;
                 toggleAt("Smart sprint", row, () -> smartSprint, () -> smartSprint = !smartSprint); row += 22;
                 toggleAt("Anti-Grim", row, () -> antiGrim, () -> antiGrim = !antiGrim); row += 22;
+                toggleAt("Auto Jump", row, () -> autoJump, () -> autoJump = !autoJump); row += 22;
             }
         };
     }

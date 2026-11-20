@@ -10,6 +10,6 @@
     "SwingAnimationsMixin","WindowTitleMixin","WindChargeMixin","ScreenAnimationsMixin",
     "TabAnimationsMixin","ChatAnimationsMixin","MenuScreenMixin","MenuWidgetsMixin",
     "MenuSliderMixin","CosmeticLayerAccess","CosmeticLayerMixin","KeyboardInputMixin",
-    "EntityTurnMixin", "EntityViewMixin", "MinecraftAccessor"
+    "EntityTurnMixin", "EntityViewMixin", "MinecraftAccessor", "FastLoadMixin"
   ],"injectors":{"defaultRequire":1}}
 

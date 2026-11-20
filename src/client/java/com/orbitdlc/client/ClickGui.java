@@ -204,7 +204,7 @@ public final class ClickGui extends Screen {
             case "aura", "aim", "trigger_bot", "auto_totem", "mace_swap", "mace_helper", "hitboxes", "target_esp" -> Column.COMBAT;
             case "sprint", "trail", "elytra_swap", "quick_rocket", "jump_circles", "jump_particles", "landing_particles", "particle_trails",
                     "steady_view", "autotool" -> Column.MOVEMENT;
-            case "skin", "nametags", "viewmodel", "swing_animations", "shader_hand", "chinahat", "click_pearl", "held_durability" -> Column.PLAYER;
+            case "skin", "nametags", "viewmodel", "swing_animations", "shader_hand", "chinahat", "click_pearl", "held_durability", "fast_load" -> Column.PLAYER;
             case "theme", "gui", "no_render", "aspectratio" -> Column.OTHER;
             case "third_person", "xray" -> Column.VISUALS;
             default -> module.category() == Category.VISUALS ? Column.VISUALS : Column.OTHER;
@@ -216,6 +216,7 @@ public final class ClickGui extends Screen {
             case Aura aura -> aura.settings(this);
             case AutoTotem totem -> totem.settings(this);
             case TriggerBot trigger -> trigger.settings(this);
+            case FastLoad fastLoad -> fastLoad.settings(this);
             case Aim aim -> aim.settings(this);
             case AutoTool autotool -> autotool.settings(this);
             case ThirdPerson tp -> tp.settings(this);

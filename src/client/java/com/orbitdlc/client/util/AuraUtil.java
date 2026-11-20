@@ -179,12 +179,18 @@ public final class AuraUtil {
     public static float getMouseDelta(float start, float end, float maxStep, float smoothFactor, boolean antiJitter) {
         float diff = Mth.wrapDegrees(end - start);
 
-        // Если antiJitter включён — не двигаем камеру при разнице < 0.5°
-        if (antiJitter && Math.abs(diff) < 0.05f) return 0; // Доводим до идеала, но плавно
+        if (antiJitter && Math.abs(diff) < 0.5f) return 0;
         if (Math.abs(diff) < 0.05f) return diff;
 
+        // Берем большую часть пути (быстро), но разбиваем её на две части
         float step = Math.abs(diff) * smoothFactor;
         if (step > maxStep) step = maxStep;
+
+        // Инерция: если мы почти у цели, делаем шаг чуть меньше
+        // (чтобы не перелететь)
+        if (Math.abs(diff) < 2.0f) {
+            step *= 0.5f;
+        }
 
         return Math.signum(diff) * step;
     }

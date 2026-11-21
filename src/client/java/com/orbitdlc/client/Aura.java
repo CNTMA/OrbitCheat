@@ -99,11 +99,13 @@ public final class Aura extends Module {
     private boolean pendingClick = false;
 
     void tick(Minecraft mc) {
-        if (!isEnabled() || mc.player == null || mc.level == null) {
+        var p = mc.player;
+        if (!isEnabled() || p == null || mc.level == null) {
             com.orbitdlc.client.util.MoveUtil.setFollowing(false);
             return;
         }
 
+        // 1. Поиск цели
         if (target == null || !isValidTarget(target)) {
             LivingEntity prev = target;
             boolean fresh = prev == null || !isValidTarget(prev);
@@ -113,63 +115,48 @@ public final class Aura extends Module {
             if (target != prev && target != null) {
                 ticks[10] = 0f;
                 ticks[11] = 0f;
-                Arrays.fill(pitchSamples, mc.player.getXRot());
+                Arrays.fill(pitchSamples, p.getXRot());
             }
         }
 
         restoreSlot();
-        var p = mc.player;
 
+        // Если цели нет — сбрасываем все плавные значения и выходим
         if (target == null) {
             ticks[8] = 1f;
             com.orbitdlc.client.util.MoveUtil.setFollowing(false);
-
-            // СБРОС ВСЕХ ПЛАВНЫХ ЗНАЧЕНИЙ
             currentYawSpeed = 0f;
             currentPitchSpeed = 0f;
             currentPredictTicks = 0f;
-
+            currentSmoothFactor = 0.01f;
             hitAge++;
             return;
         }
 
-        // ПРЫЖОК ДЛЯ КРИТА (автоматически)
-        if (onlyCrit && autoJump && p.onGround() && !p.isInWater() && !p.onClimbable()) {
-            double reach = Math.min(attackRange, 3.0) - 0.05;
-            if (AuraUtil.withinReach(target, reach)) {
-                // Прыгаем только если меч готов к удару (чтобы не прыгать впустую)
-                if (p.getAttackStrengthScale(0.5f) >= 0.9f) {
-                    p.jumpFromGround();
-                }
-            }
-        }
-
-
-        // ОДИН вызов updateRotation — он двигает камеру
+        // 2. Наводка
         updateRotation(mc);
 
-        // ПРЫЖОК ДЛЯ КРИТА (автоматически)
+        // 3. Прыжок для крита (если цель в радиусе и меч готов)
         if (onlyCrit && autoJump && p.onGround() && !p.isInWater() && !p.onClimbable()) {
             double reach = Math.min(attackRange, 3.0) - 0.05;
-            if (AuraUtil.withinReach(target, reach)) {
-                // Прыгаем только если меч готов к удару (чтобы не прыгать впустую)
-                if (p.getAttackStrengthScale(0.5f) >= 0.9f) {
-                    p.jumpFromGround();
-                }
+            if (AuraUtil.withinReach(target, reach) && p.getAttackStrengthScale(0.5f) >= 0.9f) {
+                p.jumpFromGround();
             }
         }
 
-        // Атака
+        // 4. Атака
         if (canAttackNow(mc)) {
-            // 1. Если спринтим — сбрасываем спринт и ЖДЕМ следующего тика
+            // Сброс спринта за 1 тик до удара (для крита и Grim)
             if (p.isSprinting()) {
                 p.setSprinting(false);
-                mc.getConnection().send(new net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket(
-                        p, net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket.Action.STOP_SPRINTING));
-                return;
+                if (mc.getConnection() != null) {
+                    mc.getConnection().send(new net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket(
+                            p, net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket.Action.STOP_SPRINTING));
+                }
+                return; // Ждем следующего тика, чтобы сервер обработал остановку спринта
             }
 
-            // 2. Бьем (в следующем тике, когда уже не спринтим и, возможно, падаем)
+            // Бьем
             ((com.orbitdlc.client.mixin.MinecraftAccessor) mc).orbitdlc$startAttack();
             hitAge = 0;
             ticks[5] = random(8f, 10f);
@@ -186,26 +173,38 @@ public final class Aura extends Module {
         var p = mc.player;
         if (p == null || target == null) return false;
 
+        // 1. Меч должен быть заряжен на 100% (Grim требует)
         if (p.getAttackStrengthScale(0.5f) < 1.0f) return false;
 
+        // 2. Дистанция
         double reach = Math.min(attackRange, 3.0) - 0.05;
         if (!AuraUtil.withinReach(target, reach)) return false;
 
+        // 3. Меню
         if (noContainerOpen && mc.gui.screen() != null
                 && !(mc.gui.screen() instanceof ClickGui)
                 && !(mc.gui.screen() instanceof ModuleSettings)) return false;
 
-        // ЕСЛИ ВКЛЮЧЕНЫ ТОЛЬКО КРИТЫ — ПРОВЕРЯЕМ ПАДЕНИЕ
+        // 4. УМНАЯ ЛОГИКА КРИТОВ
         if (onlyCrit) {
-            // Крит возможен, только если мы падаем и не в воде
-            if (p.onGround() || p.isInWater() || p.onClimbable() || p.isSprinting()) {
-                return false;
+            // Если мы на земле — крит невозможен, ждем прыжка
+            if (p.onGround()) return false;
+
+            // Если падаем (fallDistance > 0) — идеальный момент для крита
+            if (p.fallDistance > 0.0f && !p.isInWater() && !p.onClimbable()) {
+                return true; // БЬЕМ КРИТОМ
             }
+
+            // Если мы в прыжке, но еще не начали падать (летим вверх) — ждем
+            if (p.getDeltaMovement().y > 0) return false;
+
+            // Если мы уже начали падать, но крит не выходит (близко/быстро) — бьем как толчок
+            // Это спасает от пропусков урона
+            return true;
         }
 
-        return true;
+        return true; // Если onlyCrit выключен — бьем всегда
     }
-
     // Поле для плавного наращивания предсказания (1 -> 2 -> 3 ... 27)
     private float currentPredictTicks = 0f;
 
